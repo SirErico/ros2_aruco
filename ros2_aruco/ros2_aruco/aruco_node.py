@@ -36,9 +36,12 @@ import cv2
 import tf_transformations
 from sensor_msgs.msg import CameraInfo
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import PoseArray, Pose
+from geometry_msgs.msg import PoseArray, Pose, PoseStamped, TransformStamped
 from ros2_aruco_interfaces.msg import ArucoMarkers
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
+import tf2_ros
+from tf2_ros import TransformException
+import tf2_geometry_msgs
 
 
 class ArucoNode(rclpy.node.Node):
@@ -84,10 +87,19 @@ class ArucoNode(rclpy.node.Node):
 
         self.declare_parameter(
             name="camera_frame",
-            value="",
+            value="camera_rgb_optical_frame",
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
                 description="Camera optical frame to use.",
+            ),
+        )
+
+        self.declare_parameter(
+            name="reference_frame",
+            value="",
+            descriptor=ParameterDescriptor(
+                type=ParameterType.PARAMETER_STRING,
+                description="Reference frame for transformed poses (empty = camera frame only).",
             ),
         )
 
@@ -114,6 +126,12 @@ class ArucoNode(rclpy.node.Node):
         self.camera_frame = (
             self.get_parameter("camera_frame").get_parameter_value().string_value
         )
+
+        self.reference_frame = (
+            self.get_parameter("reference_frame").get_parameter_value().string_value
+        )
+        if self.reference_frame:
+            self.get_logger().info(f"Reference frame: {self.reference_frame}")
 
         # Make sure we have a valid dictionary id:
         try:
@@ -148,6 +166,10 @@ class ArucoNode(rclpy.node.Node):
         self.aruco_dictionary = cv2.aruco.Dictionary_get(dictionary_id)
         self.aruco_parameters = cv2.aruco.DetectorParameters_create()
         self.bridge = CvBridge()
+
+        # Set up TF2 for coordinate transformations
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
     def info_callback(self, info_msg):
         self.info_msg = info_msg
@@ -200,6 +222,30 @@ class ArucoNode(rclpy.node.Node):
                 pose.orientation.y = quat[1]
                 pose.orientation.z = quat[2]
                 pose.orientation.w = quat[3]
+
+                # Transform to reference frame if specified
+                if self.reference_frame:
+                    try:
+                        pose_stamped = PoseStamped()
+                        pose_stamped.header.frame_id = self.camera_frame
+                        pose_stamped.header.stamp = img_msg.header.stamp
+                        pose_stamped.pose = pose
+                        
+                        # Transform pose to reference frame
+                        transformed_pose = self.tf_buffer.transform(
+                            pose_stamped, self.reference_frame, timeout=rclpy.duration.Duration(seconds=0.1)
+                        )
+                        pose = transformed_pose.pose
+                        
+                        self.get_logger().info(
+                            f"Marker ID {marker_id[0]} in {self.reference_frame}: "
+                            f"x={pose.position.x:.2f}, y={pose.position.y:.2f}, z={pose.position.z:.2f}"
+                        )
+                    except TransformException as ex:
+                        self.get_logger().warn(
+                            f"Could not transform to {self.reference_frame}: {ex}"
+                        )
+                        continue
 
                 pose_array.poses.append(pose)
                 markers.poses.append(pose)
