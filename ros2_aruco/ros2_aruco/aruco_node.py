@@ -187,12 +187,12 @@ class ArucoNode(rclpy.node.Node):
         markers = ArucoMarkers()
         pose_array = PoseArray()
         if self.camera_frame == "":
-            markers.header.frame_id = self.info_msg.header.frame_id
-            pose_array.header.frame_id = self.info_msg.header.frame_id
+            initial_frame = self.info_msg.header.frame_id
         else:
-            markers.header.frame_id = self.camera_frame
-            pose_array.header.frame_id = self.camera_frame
-
+            initial_frame = self.camera_frame
+            
+        markers.header.frame_id = initial_frame
+        pose_array.header.frame_id = initial_frame
         markers.header.stamp = img_msg.header.stamp
         pose_array.header.stamp = img_msg.header.stamp
 
@@ -228,7 +228,7 @@ class ArucoNode(rclpy.node.Node):
                     try:
                         pose_stamped = PoseStamped()
                         pose_stamped.header.frame_id = self.camera_frame
-                        pose_stamped.header.stamp = img_msg.header.stamp
+                        pose_stamped.header.stamp = rclpy.time.Time()  # Use latest available transform
                         pose_stamped.pose = pose
                         
                         # Transform pose to reference frame
@@ -236,6 +236,10 @@ class ArucoNode(rclpy.node.Node):
                             pose_stamped, self.reference_frame, timeout=rclpy.duration.Duration(seconds=0.1)
                         )
                         pose = transformed_pose.pose
+                        
+                        # Update frame_id to reference frame
+                        markers.header.frame_id = self.reference_frame
+                        pose_array.header.frame_id = self.reference_frame
                         
                         self.get_logger().info(
                             f"Marker ID {marker_id[0]} in {self.reference_frame}: "
